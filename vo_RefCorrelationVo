@@ -1,0 +1,57 @@
+/**
+ * 
+ */
+package com.aibril.antibiotics.ue.research.vo;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+
+import com.aibril.antibiotics.kb.vo.search.EsProperty;
+
+/**
+ * @author 08248
+ *
+ */
+public class RefCorrelationVO {
+	private Map<String, Object> firstFacet;
+	private Map<String, Object> secondFacet;
+	private double count;
+	private double correlation;
+	
+	public Map<String, Object> getFirstFacet() {
+		Map<String, Object> ret = new HashMap<String, Object>();
+		ret.putAll(firstFacet);
+		return ret;
+	}
+	public void setFirstFacet(Map<String, Object> firstFacet) {
+		this.firstFacet = (firstFacet == null) ? new HashMap<String, Object>() : new HashMap<String, Object>(firstFacet);
+	}
+	public Map<String, Object> getSecondFacet() {
+		Map<String, Object> ret = new HashMap<String, Object>();
+		ret.putAll(secondFacet);
+		return ret;
+	}
+	public void setSecondFacet(Map<String, Object> secondFacet) {
+		this.secondFacet = (secondFacet == null) ? new HashMap<String, Object>() : new HashMap<String, Object>(secondFacet);
+	}
+	public double getCount() {
+		return count;
+	}
+	public void setCount(double count) {
+		this.count = count;
+	}
+	public double getCorrelation() {
+		return correlation;
+	}
+	public void setCorrelation(double correlation) {
+		this.correlation = correlation;
+	}
+	
+	@Override
+	public String toString() {
+		String ret = "RefCorrelationVO [firstFacet=" + firstFacet + ", secondFacet=" + secondFacet + ", count=" + count
+				+ ", correlation=" + correlation + "]";
+		return ret;
+	}
+}
