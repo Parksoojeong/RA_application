@@ -1,0 +1,196 @@
+package com.aibril.antibiotics.ue.research.dao;
+
+import java.util.List;
+
+import javax.annotation.Resource;
+
+import org.neo4j.driver.v1.AuthTokens;
+import org.neo4j.driver.v1.Driver;
+import org.neo4j.driver.v1.GraphDatabase;
+import org.neo4j.driver.v1.Record;
+import org.neo4j.driver.v1.Session;
+import org.neo4j.driver.v1.StatementResult;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Repository;
+
+import com.aibril.antibiotics.kb.service.IWEXService;
+import com.aibril.antibiotics.kb.vo.analysis.AnalysisResponseWrapper;
+import com.aibril.antibiotics.kb.vo.preview.PreviewResponseWrapper;
+import com.aibril.antibiotics.kb.vo.search.SearchResponseWrapper;
+import com.aibril.antibiotics.ue.common.UeAbstractMapper;
+
+@Repository
+public class ResearchDAO extends UeAbstractMapper {
+
+	@Resource(name="wexService")
+	private IWEXService wexService;
+
+	@Value("${kb.neo4j.url}")
+	private String NEO4J_URL;
+	@Value("${kb.neo4j.username}")
+	private String NEO4J_USERNAME;
+	@Value("${kb.neo4j.password}")
+	private String NEO4J_PASSWORD;
+
+	/**
+	 * WEX Search API 호출
+	 * @param collection
+	 * @param output
+	 * @param query
+	 * @param start
+	 * @param results
+	 * @param sorts
+	 * @return
+	 */
+	public SearchResponseWrapper callSearchAPI(String collection, String output, String query, int start, int results, String... sorts) {
+		SearchResponseWrapper response = wexService.search(
+				collection, 
+				output, 
+				query,
+				"en",
+				start,
+				results,
+				sorts
+				);
+
+		return response;
+	}
+
+	/**
+	 * WEX Search Count API 호출
+	 * @param collection
+	 * @param output
+	 * @param query
+	 * @return
+	 */
+	public SearchResponseWrapper callSearchCountAPI(String collection, String output, String query) {
+		SearchResponseWrapper response = wexService.count(
+				collection, 
+				output, 
+				query,
+				"en"
+				);
+
+		return response;
+	}
+	
+	/**
+	 * WEX Search Facet API 호출
+	 * @param collection
+	 * @param output
+	 * @param query
+	 * @param facet
+	 * @return
+	 */
+	public SearchResponseWrapper callFacetAPI(String collection, String output, String query, String[] facet) {
+		SearchResponseWrapper response = wexService.facet(
+				collection, 
+				output, 
+				query,
+				"en",
+				true,
+				facet
+				);
+
+		return response;
+	}
+	
+	/**
+	 * WEX Analysis API 호출
+	 * @param collection
+	 * @param output
+	 * @param text
+	 * @return
+	 */
+	public AnalysisResponseWrapper callAnalysisAPI(String collection, String output, String text) {
+		AnalysisResponseWrapper response = wexService.analysis(
+				collection, 
+				output, 
+				text
+			);
+
+		return response;
+	}
+	
+	/**
+	 * WEX Browse API 호출
+	 * @param collection
+	 * @param output
+	 * @param namespaces
+	 * @return
+	 */
+	public SearchResponseWrapper callBrowseAPI(String collection, String output, String namespaces) {
+		SearchResponseWrapper response = wexService.browse(
+				collection, 
+				output, 
+				namespaces
+			);
+
+		return response;
+	}
+	
+	/**
+	 * WEX Search Facet Cube API 호출(패싯 쌍 호출)
+	 * @param collection
+	 * @param output
+	 * @param query
+	 * @param facet
+	 * @return
+	 */
+	public SearchResponseWrapper callFacetCubeAPI(String collection, String output, String query, String facets) {
+		SearchResponseWrapper response = wexService.cube(
+				collection, 
+				output, 
+				query,
+				"en",
+				true,
+				"facetPairs",
+				facets
+				);
+
+		return response;
+	}
+	
+	/**
+	 * WEX Search Preview API 호출
+	 * @param collection
+	 * @param output
+	 * @param query
+	 * @param uri
+	 * @return
+	 */
+	public PreviewResponseWrapper callPreviewAPI(String collection, String output, String query, String uri) {
+		PreviewResponseWrapper response = wexService.preview(
+				collection, 
+				output, 
+				query,
+				"en",
+				uri
+				);
+
+		return response;
+	}
+	
+	/**
+	 * GraphDatabase(Neo4j)에 WEX에서 추출된 Entity와 연관되는 결과를 조회한다. 
+	 * @param queryStr
+	 * @param queryParam
+	 * @return
+	 */
+	public List<Record> getGraphDataList(String queryStr, org.neo4j.driver.v1.Value queryParam){
+		List<Record> resultList = null;
+		
+//		logger.debug("### NEO4J URL : "+ NEO4J_URL);
+		
+		Driver driver = GraphDatabase.driver(NEO4J_URL, AuthTokens.basic(NEO4J_USERNAME, NEO4J_PASSWORD));
+		
+		try(Session session = driver.session())
+		{
+			StatementResult result = session.run(queryStr, queryParam);
+			
+			resultList = result.list();
+		}
+		
+		return resultList;
+	}
+}
