@@ -1,0 +1,39 @@
+/**
+ * 
+ */
+package com.aibril.antibiotics.ue.research.vo;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * @author 08248
+ *
+ */
+public class SearchCorrelationVO {
+	private List<String> firstFacetPath = new ArrayList<String>();
+	private List<String> secondFacetPath = new ArrayList<String>();
+	
+	public List<String> getFirstFacetPath() {
+		List<String> ret = new ArrayList<String>();
+		ret.addAll(firstFacetPath);
+		return ret;
+	}
+	public void setFirstFacetPath(List<String> firstFacetPath) {
+		this.firstFacetPath = (firstFacetPath == null) ? new ArrayList<String>() : new ArrayList<String>(firstFacetPath);
+	}
+	public List<String> getSecondFacetPath() {
+		List<String> ret = new ArrayList<String>();
+		ret.addAll(secondFacetPath);
+		return ret;
+	}
+	public void setSecondFacetPath(List<String> secondFacetPath) {
+		this.secondFacetPath = (secondFacetPath == null) ? new ArrayList<String>() : new ArrayList<String>(secondFacetPath);
+	}
+	
+	@Override
+	public String toString() {
+		String ret = "SearchCorrelationVO [firstFacetPath=" + firstFacetPath + ", secondFacetPath=" + secondFacetPath + "]";
+		return ret;
+	}
+}
