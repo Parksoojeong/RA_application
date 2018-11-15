@@ -1,0 +1,442 @@
+package com.aibril.antibiotics.ue.research.controller;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.lang.StringEscapeUtils;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.utils.URIBuilder;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.util.EntityUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.ResponseBody;
+
+import com.aibril.antibiotics.kb.vo.neo4j.GraphDatabaseVO;
+import com.aibril.antibiotics.kb.vo.search.IbmbfFacet;
+import com.aibril.antibiotics.ue.common.ProductConstants;
+import com.aibril.antibiotics.ue.common.vo.BaseDataResponseVo;
+import com.aibril.antibiotics.ue.common.vo.BaseListDataResponseVo;
+import com.aibril.antibiotics.ue.reference.vo.RefArticleVO;
+import com.aibril.antibiotics.ue.research.service.ResearchService;
+import com.aibril.antibiotics.ue.research.vo.RefCorrelationVO;
+import com.aibril.antibiotics.ue.research.vo.ResearchArticleVO;
+import com.aibril.antibiotics.ue.research.vo.ResearchResponseVO;
+
+/**
+ * 화면에서 입력한 Keyword로 WEX API를 호출하여, 특정 Collection의 검색결과를 조회한다.
+ * 1-1. 기본 Keyword 검색
+ * 2-1. 입력한 Keyword의 Entity/Relation 검색
+ * 2-2. 조회된 Keyword의 Entity를 query 조합 후 Facet 검색
+ * 2-3. 조회된 Keyword의 Relation을 query 조합 후 Facet 검색
+ * 3-1. 입력한 Keyword의 GraphDB 결과 출력
+ * 
+ * @author 08248
+ * 
+ */
+@Controller
+@RequestMapping("/rest/research")
+public class ResearchController
+{
+	private static final Logger	logger	= LoggerFactory.getLogger(ResearchController.class);
+	
+	@Autowired
+	private ResearchService researchService;
+
+	/**
+	 * Keyword로 WEX Search API를 이용해서 논문 리스트를 조회한다.
+	 * @param searchVo
+	 * @param request
+	 * @return
+	 * @throws NullPointerException
+	 */
+	@RequestMapping(value = "/keywordSearchList", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })	
+	public @ResponseBody BaseListDataResponseVo<RefArticleVO> getKeywordSearchList(@RequestBody ResearchArticleVO searchVo, HttpServletRequest request) throws NullPointerException
+	{
+		logger.info("entering ResearchController.getKeywordSearchList");
+		
+		BaseListDataResponseVo<RefArticleVO> respVO = new BaseListDataResponseVo<RefArticleVO>();
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+		
+		try {
+			
+			List<RefArticleVO> refArticleVOList = researchService.getKeywordSearch(searchVo);
+			
+			respVO.setListData(refArticleVOList);
+			
+			return respVO;
+			
+		} catch (NullPointerException  e) {
+			logger.info(ProductConstants.EXCEPTION_WARNING_MESSAGE);
+		} 
+		
+		return null;
+	}
+	
+	/**
+	 * Keyword로 WEX Analysis API로 Facet 결과를 받고 Entity Facet으로 WEX Search API를 이용해서 논문 리스트를 조회한다.
+	 * @param searchVo
+	 * @param request
+	 * @return
+	 * @throws NullPointerException
+	 */
+	@RequestMapping(value = "/facetSearchList", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })
+	public @ResponseBody BaseDataResponseVo<ResearchResponseVO> getFacetSearchList(@RequestBody ResearchArticleVO searchVo, HttpServletRequest request) throws NullPointerException
+	{
+		logger.info("entering ResearchController.getFacetSearchList");
+		
+		BaseDataResponseVo<ResearchResponseVO> respVO = new BaseDataResponseVo<ResearchResponseVO>();
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+
+		try {
+			
+			ResearchResponseVO res = researchService.getFacetSearch(searchVo);
+
+			respVO.setData(res);
+			
+			return respVO;
+			
+		} catch (NullPointerException  e) {
+			logger.info(ProductConstants.EXCEPTION_WARNING_MESSAGE);
+		} 
+		
+		return null;
+	}
+	
+	/**
+	 * Keyword로 WEX Search Facet API를 이용해서 시계열 리스트를 조회한다.
+	 * @param searchVo
+	 * @param request
+	 * @return
+	 * @throws NullPointerException
+	 */
+	@RequestMapping(value = "/dateViewList", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })
+	public @ResponseBody BaseDataResponseVo<ResearchResponseVO> getDateViewList(@RequestBody ResearchArticleVO searchVo, HttpServletRequest request) throws NullPointerException
+	{
+		logger.info("entering ResearchController.getDateViewList");
+		
+		BaseDataResponseVo<ResearchResponseVO> respVO = new BaseDataResponseVo<ResearchResponseVO>();
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+
+		try {
+			
+			ResearchResponseVO res = researchService.getDateViewList(searchVo);
+
+			respVO.setData(res);
+			
+			return respVO;
+			
+		} catch (NullPointerException  e) {
+			logger.info(ProductConstants.EXCEPTION_WARNING_MESSAGE);
+		} 
+		
+		return null;
+	}
+	
+	/**
+	 * Keyword로 WEX Search Facet API를 이용해서 Word 리스트를 조회한다.
+	 * @param searchVo
+	 * @param request
+	 * @return
+	 * @throws NullPointerException
+	 */
+	@RequestMapping(value = "/wordCloudList", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })
+	public @ResponseBody BaseDataResponseVo<ResearchResponseVO> getWordCloudList(@RequestBody ResearchArticleVO searchVo, HttpServletRequest request) throws NullPointerException
+	{
+		logger.info("entering ResearchController.getWordCloudList");
+		
+		BaseDataResponseVo<ResearchResponseVO> respVO = new BaseDataResponseVo<ResearchResponseVO>();
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+
+		try {
+			
+			ResearchResponseVO res = researchService.getWordCloudList(searchVo);
+
+			respVO.setData(res);
+			
+			return respVO;
+			
+		} catch (NullPointerException  e) {
+			logger.info(ProductConstants.EXCEPTION_WARNING_MESSAGE);
+		} 
+		
+		return null;
+	}
+	
+	/**
+	 * Keyword로 WEX Analysis API로 Facet 결과를 받고 Entity Facet으로 Neo4j 쿼리를 실행해서 Facet별 연관리스트를 조회한다.
+	 * @param searchVo
+	 * @param request
+	 * @return
+	 * @throws NullPointerException
+	 */
+	@RequestMapping(value = "/graphDataList", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })
+	public @ResponseBody BaseDataResponseVo<GraphDatabaseVO> getGraphDataList(@RequestBody ResearchArticleVO searchVo, HttpServletRequest request) throws NullPointerException
+	{
+		logger.info("entering ResearchController.getGraphDataList");
+		
+		BaseDataResponseVo<GraphDatabaseVO> respVO = new BaseDataResponseVo<GraphDatabaseVO>();
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+
+		try {
+			
+			GraphDatabaseVO graphDatabase = researchService.getGraphDataList(searchVo);
+
+			respVO.setData(graphDatabase);
+			
+			return respVO;
+			
+		} catch (NullPointerException  e) {
+			logger.info(ProductConstants.EXCEPTION_WARNING_MESSAGE);
+		} 
+		
+		return null;
+	}
+	
+	@RequestMapping(value = "/browseList", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })
+	public @ResponseBody BaseDataResponseVo<IbmbfFacet> getBrowseList(@RequestBody ResearchArticleVO searchVo, HttpServletRequest request) throws NullPointerException
+	{
+		logger.info("entering ResearchController.getBrowseList");
+		
+		BaseDataResponseVo<IbmbfFacet> respVO = new BaseDataResponseVo<IbmbfFacet>();
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+
+		try {
+			
+			List<IbmbfFacet> facetGroupList = researchService.getBrowseList(searchVo);
+
+			respVO.setDataList(facetGroupList);
+			
+			return respVO;
+			
+		} catch (NullPointerException  e) {
+			logger.info(ProductConstants.EXCEPTION_WARNING_MESSAGE);
+		} 
+		
+		return null;
+	}
+	
+	@RequestMapping(value = "/correlationList", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })
+	public @ResponseBody BaseDataResponseVo<RefCorrelationVO> getCorrelationList(@RequestBody ResearchArticleVO searchVo, HttpServletRequest request) throws NullPointerException
+	{
+		logger.info("entering ResearchController.getCorrelationList");
+		
+		BaseDataResponseVo<RefCorrelationVO> respVO = new BaseDataResponseVo<RefCorrelationVO>();
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+
+		try {
+			
+			List<RefCorrelationVO> correlationList = researchService.getCorrelationList(searchVo);
+
+			respVO.setDataList(correlationList);
+			
+			return respVO;
+			
+		} catch (NullPointerException  e) {
+			logger.info(ProductConstants.EXCEPTION_WARNING_MESSAGE);
+		} 
+		
+		return null;
+	}
+	
+	@RequestMapping(value = "/correlationSearchList", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })
+	public @ResponseBody BaseDataResponseVo<ResearchResponseVO> getCorrelationSearchList(@RequestBody ResearchArticleVO searchVo, HttpServletRequest request) throws NullPointerException
+	{
+		logger.info("entering ResearchController.getCorrelationSearchList");
+		
+		BaseDataResponseVo<ResearchResponseVO> respVO = new BaseDataResponseVo<ResearchResponseVO>();
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+
+		try {
+			
+			ResearchResponseVO res = researchService.getCorrelationSearchList(searchVo);
+
+			respVO.setData(res);
+			
+			return respVO;
+			
+		} catch (NullPointerException  e) {
+			logger.info(ProductConstants.EXCEPTION_WARNING_MESSAGE);
+		} 
+		
+		return null;
+	}
+	
+	@RequestMapping(value = "/articlePreview", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })
+	public @ResponseBody BaseDataResponseVo<String> getArticlePreview(@RequestBody ResearchArticleVO searchVo, HttpServletRequest request) throws NullPointerException
+	{
+		logger.info("entering ResearchController.getArticlePreview");
+		
+		BaseDataResponseVo<String> respVO = new BaseDataResponseVo<String>();
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+
+		try {
+			
+			String articlePreview = researchService.getArticlePreview(searchVo);
+
+			respVO.setData(articlePreview);
+			
+			return respVO;
+			
+		} catch (NullPointerException  e) {
+			logger.info(ProductConstants.EXCEPTION_WARNING_MESSAGE);
+		} 
+		
+		return null;
+	}
+	
+	/**
+	 * 선택한 논문의 상세정보를 Download 한다.
+	 * @param response
+	 * @param request
+	 * @throws NullPointerException
+	 */
+	@RequestMapping(value = "/downloadArticle", method = RequestMethod.POST, produces = { MediaType.APPLICATION_JSON_VALUE })
+	public void downloadArticleFile(@RequestBody ResearchArticleVO searchVo, HttpServletResponse response, HttpServletRequest request) throws IOException
+	{
+		logger.info("entering ResearchController.downloadArticleFile");
+		
+		logger.debug("======================================");
+		logger.debug(searchVo.toString());
+		logger.debug("======================================");
+		
+		List<String> pmidArr = searchVo.getPmidArr();
+		
+
+		if(pmidArr.size() > 0)
+		{
+			
+			BufferedWriter bw = null;
+			FileWriter fw = null;
+			try{
+		
+				/** PubMed에서 대상 논문 Contents를 가져와서 Text파일 하나로 생성해서 Download한다. **/
+				String articleFileName = "pubmed_result.txt";
+				File articleFile = new File(articleFileName);
+
+				
+				fw = new FileWriter(articleFile);
+				bw = new BufferedWriter(fw);
+				
+				for(String pmidStr : pmidArr)
+				{
+					/** PubMed에서 가져올 경우 **/
+					URI sUri = new URI("https://www.ncbi.nlm.nih.gov/pubmed/"+ pmidStr);
+					URIBuilder uriBuilder = new URIBuilder(sUri);
+					uriBuilder.addParameter("report", "abstract");	
+
+					uriBuilder.addParameter("format", "text");
+					
+					HttpClient httpClient = HttpClientBuilder.create().build();
+					HttpResponse httpResponse = httpClient.execute(new HttpGet(uriBuilder.build()));
+					
+					HttpEntity httpEntity = httpResponse.getEntity();
+					String resContent = StringEscapeUtils.unescapeHtml(EntityUtils.toString(httpEntity));
+
+					
+					// 개행문자 변환
+					String[] contentArr = resContent.split("\n");
+					logger.debug("### contentArr length : "+ contentArr.length);
+					
+					bw.write("\r\n");
+          
+					for(String contStr : contentArr)
+					{
+						// HTML 태그는 제외
+						if(contStr.startsWith("<?") == false && contStr.startsWith("<!") == false && contStr.equals("<pre>") == false && contStr.equals("</pre>") == false)
+						{
+							
+							// 논문 시작부분은 부호로 변환
+							if(contStr.startsWith("1."))
+							{
+								Pattern pattern = Pattern.compile("1.");
+								Matcher matcher = pattern.matcher(contStr);
+								
+								contStr = matcher.replaceFirst("▶");
+							}
+							
+							bw.write(contStr);
+							bw.write("\r\n");
+
+						}
+					}
+				}
+				
+				bw.flush();
+				fw.flush();
+
+				logger.debug("### Local File Size : "+ FileUtils.sizeOf(articleFile));
+				
+				byte fileByte[] = FileUtils.readFileToByteArray(articleFile);
+				
+				response.setContentType("application/octet-stream; charset=UTF-8");
+				response.setContentLength(fileByte.length);
+				response.setHeader("Content-Disposition", "attachment; fileName=\"" + URLEncoder.encode(articleFile.getName(),"UTF-8")+"\"");
+				response.setHeader("Content-Transfer-Encoding", "binary");
+				response.getOutputStream().write(fileByte);
+				
+				response.getOutputStream().flush();
+				response.getOutputStream().close();
+				
+			} catch(IOException iex){
+				logger.info("downloadArticleFile.downloadArticleFile()에서 IOException 발생");
+			} catch(Exception ex){
+				logger.info("downloadArticleFile.downloadArticleFile()에서 Exception 발생");
+			} finally{
+				
+				if(bw != null) bw.close();
+				if(fw != null) fw.close();
+			}
+			
+			/** WEX Server에서 가져올 경우 **/
+
+		}
+	}
+}
