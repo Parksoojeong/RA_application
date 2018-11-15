@@ -1,0 +1,1372 @@
+package com.aibril.antibiotics.ue.research.service;
+
+import static org.neo4j.driver.v1.Values.parameters;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.commons.collections.IteratorUtils;
+import org.apache.commons.lang.StringUtils;
+import org.neo4j.driver.v1.Record;
+import org.neo4j.driver.v1.types.Node;
+import org.neo4j.driver.v1.types.Relationship;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import com.aibril.antibiotics.kb.util.WEXUtil;
+import com.aibril.antibiotics.kb.vo.analysis.AnalysisResponseWrapper;
+import com.aibril.antibiotics.kb.vo.analysis.MetaData;
+import com.aibril.antibiotics.kb.vo.analysis.TextFacets;
+import com.aibril.antibiotics.kb.vo.neo4j.GraphDatabaseVO;
+import com.aibril.antibiotics.kb.vo.neo4j.NodeVO;
+import com.aibril.antibiotics.kb.vo.neo4j.RelationshipVO;
+import com.aibril.antibiotics.kb.vo.preview.PreviewResponseWrapper;
+import com.aibril.antibiotics.kb.vo.search.EsCube;
+import com.aibril.antibiotics.kb.vo.search.EsNamespace;
+import com.aibril.antibiotics.kb.vo.search.EsResult;
+import com.aibril.antibiotics.kb.vo.search.EsValue;
+import com.aibril.antibiotics.kb.vo.search.IbmbfFacet;
+import com.aibril.antibiotics.kb.vo.search.IbmscFacet;
+import com.aibril.antibiotics.kb.vo.search.IbmscFacetValue;
+import com.aibril.antibiotics.kb.vo.search.IbmscField;
+import com.aibril.antibiotics.kb.vo.search.SearchResponseWrapper;
+import com.aibril.antibiotics.ue.reference.vo.RefArticleVO;
+import com.aibril.antibiotics.ue.research.dao.ResearchDAO;
+import com.aibril.antibiotics.ue.research.vo.RefCorrelationVO;
+import com.aibril.antibiotics.ue.research.vo.ResearchArticleVO;
+import com.aibril.antibiotics.ue.research.vo.ResearchResponseVO;
+import com.aibril.antibiotics.ue.research.vo.SearchCorrelationVO;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+@Service
+public class ResearchService {
+
+	private Logger logger = LoggerFactory.getLogger(this.getClass());
+
+	private static final String START_QUERY_CHARACTER = "(";
+	private static final String END_QUERY_CHARACTER = ")";
+	private static final String OR_QUERY_STRING = " OR ";
+	private static final String AND_QUERY_STRING = " AND ";
+	private static final String DEFAULT_QUERY_STRING = "*:*";
+
+	
+	@Autowired
+	private ResearchDAO researchDAO;
+
+	@Value("${kb.wex.collection.article}")  
+	private String ARTICLE_COLLECTION;
+	
+	@Value("${kb.query.prefix.keyword}")
+	private String prefixKeyword;
+	@Value("${kb.query.prefix.subfacet}")
+	private String prefixSubfacet;
+	@Value("${kb.wex.output}")  
+	private String OUTPUT;
+	@Value("${kb.wex.results}")  
+	private int    RESULTS;
+
+//	private String SORT_PUBTYPE = "{'key':'pubtypeorder','order':'desc'}";
+//	private String SORT_PUBDATE="{'key':'publishdate','order':'desc'}";
+//	private String SORT_IMPACTFACTOR="{'key':'impactfactor','order':'desc'}";
+	
+	/**
+	 * Keyword로 WEX Search API를 이용해서 논문 리스트를 조회한다.
+	 * @param req
+	 * @return
+	 */
+	public List<RefArticleVO> getKeywordSearch(ResearchArticleVO req)
+	{
+		String chartYear = req.getChartYear();
+		List<String> wordCloud = req.getWordCloud();
+		RelationshipVO relationshipInfo = req.getRelationshipInfo();
+		
+		String searchQuery = "";
+		
+		// Network Chart Relation 선택시 Param 조합
+		if(relationshipInfo != null && "".equals(relationshipInfo.getName()) == false)
+		{
+			StringBuffer buffer = new StringBuffer();
+			
+			/** WEX의 Entity와 관련된 SubFacet의 구조를 Neo4J에서 라벨(Label), 특성(Key) 형태로 가지고 있으므로 주의할 것. **/
+			/** 동일한 Entity이지만, SubFacet이 다를 수 있으므로 From, To에 해당하는 Node의 정보를 조회해서 조건으로 추가할 필요성이 있음.(정확성을 높이기 위해서) **/
+			// Neo4j에서 Start Node, End Node의 정보를 가져온다.
+			StringBuffer queryBuf = new StringBuffer();
+			queryBuf.append("MATCH (n) ");
+			queryBuf.append("WHERE id(n)=$startNodeId or id(n)=$endNodeId ");
+			queryBuf.append("RETURN n ");
+			
+			logger.debug("Relation Query : "+ queryBuf.toString());
+			
+			// Neo4j Data를 조회한다.
+			List<Record> resultList = researchDAO.getGraphDataList(queryBuf.toString(), parameters("startNodeId", relationshipInfo.getStartNodeId(), "endNodeId", relationshipInfo.getEndNodeId()));
+			
+			for(Record recordInfo : resultList)
+			{
+				List<String> pathArr = new ArrayList<String>();
+				pathArr.add("mykeyword");
+				pathArr.add("Entity");
+				
+				Map<String, Object> objMap = recordInfo.asMap();
+				
+				/* Node Info */
+				Node nodeInfo = (Node)objMap.get("n");
+
+				// Node의 Label을 SubFacet으로 추가(Family는 우선 제외)
+				boolean isFamily = false;
+				for(String nodeLabel : nodeInfo.labels())
+				{
+					if("FAMILY".equals(nodeLabel)==false)
+						pathArr.add(nodeLabel);
+					else
+						isFamily = true;
+				}
+				
+				String nodeQuery = "";
+				String nodeName = "";
+				for(String nodeKey : nodeInfo.keys())
+				{
+					if(("routeOfInfection".equals(nodeKey) || "type".equals(nodeKey)) && "".equals(nodeInfo.get(nodeKey).asString())==false)
+							nodeQuery = nodeInfo.get(nodeKey).asString();
+					
+					if("name".equals(nodeKey))
+						nodeName = nodeInfo.get(nodeKey).asString();
+				}
+				
+				// Node에 RouteOfInfection, Type 특성이 있으면 SubFacet으로 추가
+				if("".equals(nodeQuery)==false)
+				{
+					pathArr.add(nodeQuery.toUpperCase());
+				}
+				else
+				{
+					// 다른 특성 없이 Node의 Group에 Family가 있으면 SubFacet으로 추가
+					if(isFamily)
+						pathArr.add("FAMILY");
+				}
+				
+				pathArr.add(nodeName);
+				
+				logger.debug("Node Query : "+ pathArr.toString());
+				
+				buffer.append(makeQueryForMention(pathArr, ""));
+				buffer.append(AND_QUERY_STRING);
+			}
+			
+			List<String> pathArr = new ArrayList<String>();
+			pathArr.add("mykeyword");
+			pathArr.add("Relation");
+			pathArr.add(relationshipInfo.getName());
+			
+			StringBuffer keywordStr = new StringBuffer();
+			keywordStr.append(relationshipInfo.getName());
+			keywordStr.append(" : ");
+			keywordStr.append(relationshipInfo.getStartNodeName());
+			keywordStr.append(" - ");
+			keywordStr.append(relationshipInfo.getEndNodeName());
+			
+			buffer.append(makeQueryForMention(pathArr, keywordStr.toString()));
+			
+			searchQuery = buffer.toString();
+		}
+		else
+		{
+			StringBuffer buffer = new StringBuffer();
+			String keyword = req.getKeyword();
+			buffer.append(keyword);
+			
+			// 차트 선택시 Param 조합
+			if("".equals(chartYear) == false)
+			{
+				buffer.append(AND_QUERY_STRING);
+				
+				// AND (publishdate >="2004-01-01 00:00:00" publishdate <="2004-12-31 23:59:59")
+				
+				buffer.append("publishdate >=\"");
+				buffer.append(chartYear +"-01-01 00:00:00\"");
+				buffer.append(" publishdate <=\"");
+				buffer.append(chartYear +"-12-31 23:59:59\"");
+			}
+
+			// Word Cloud 선택시 Param 조합
+			if(wordCloud.size() > 0)
+			{
+				buffer.append(AND_QUERY_STRING);
+
+				buffer.append(START_QUERY_CHARACTER);
+
+				buffer.append(prefixKeyword);
+				
+				for(int idx=0;idx < wordCloud.size();idx++)
+				{
+					if(idx > 0) buffer.append("/\"");
+					else buffer.append("\"");
+					
+					buffer.append(wordCloud.get(idx));
+					buffer.append("\"");
+				}
+				
+				buffer.append(END_QUERY_CHARACTER);
+			}
+			
+			searchQuery = buffer.toString();
+		}
+		
+		List<RefArticleVO> res = getArticleReference(searchQuery, req);
+		
+		return res;
+	}
+
+	/**
+	 * Keyword로 WEX Analysis API로 Facet 결과를 받고 Entity Facet으로 WEX Search API를 이용해서 논문 리스트를 조회한다.
+	 * @param req
+	 * @return
+	 */
+	public ResearchResponseVO getFacetSearch(ResearchArticleVO req)
+	{
+		logger.debug("Start ResearchService.getFacetSearch");
+		logger.debug("======================================");
+		
+		ResearchResponseVO res = new ResearchResponseVO();
+		List<String> relHeaderList = new ArrayList<String>();
+		List<String> singleFacetList = new ArrayList<String>();
+		int relSearchCnt = 0;
+		
+		String relSearch = "";
+		if(req.getRelation() != null && "".equals(req.getRelation()) == false)
+			relSearch = req.getRelation();
+		
+		/*
+		 * 1. 입력한 Keyword로 대상 WEX Collection에서 일치하는 Facet(Entity, Relation)을 추출한다.(Analysis API) 
+		 */
+		AnalysisResponseWrapper response = researchDAO.callAnalysisAPI(ARTICLE_COLLECTION, OUTPUT, req.getKeyword());
+
+		/* Search/Facet API로 연관성 높은 Facet 순으로 추출 */
+		/* =================================== */
+		/*
+		List<String> facetParam = new ArrayList<String>();
+		try{
+			
+			facetParam = makeFacetForSearch("");
+			
+		} catch(Exception ex){
+			logger.info(ex.getMessage());
+		}
+		
+		logger.debug("### getFacetSearch Make Facet Param : "+ facetParam);
+		
+		SearchResponseWrapper resFacet = researchDAO.callFacetAPI(ARTICLE_COLLECTION, OUTPUT, req.getKeyword(), facetParam.toArray(new String[facetParam.size()]));
+		
+		IbmscFacet ibmsc_facet = resFacet.getEs_apiResponse().getIbmsc_facet();
+		List<IbmscFacetValue> ibmsc_facetValue = ibmsc_facet.getIbmsc_facetValue();
+		
+		logger.debug("### getFacetSearch IbmscFacet Label : "+ ibmsc_facet.getLabel());
+		logger.debug("### getFacetSearch IbmscFacet Type : "+ ibmsc_facet.getType());
+		logger.debug("### getFacetSearch IbmscFacet Size : "+ ibmsc_facetValue.size());
+		*/
+		/* =================================== */
+		
+		/*
+		 * 2. 추출한 Facet에서 Entity를 조합, WEX Search를 호출해서 Facet 검색에 의한 논문 리스트를 조회한다.
+		 */
+		MetaData metaData = response.getMetadata();
+		List<TextFacets> textFacetsList = metaData.getTextfacets();
+
+		List<String> entityList = new ArrayList<String>();
+		
+		if(textFacetsList.size() > 0)
+		{
+			/* (1) 추출된 Facet의 검색결과가 존재하는지 체크. 검색결과가 0일 경우 제외 */
+			/* ================================================== */
+			for(TextFacets textFacets : textFacetsList)
+			{
+				List<String> pathArr = new ArrayList<String>();
+				pathArr.addAll(textFacets.getPath());
+				String keywordStr = textFacets.getKeyword();
+				
+				/* Facet 중 My keywords 만 사용한다. */
+				if("MYKEYWORD".equals(pathArr.get(0).toUpperCase()))
+				{
+					logger.debug("==== My Keywords ===============================");
+					logger.debug("==============================================");
+					logger.debug("#### textfacets pathArr : "+ pathArr.toString());
+					logger.debug("#### textfacets keywordStr : "+ keywordStr);
+					
+					logger.debug("#### pathArr.get(1).toUpperCase() : "+ pathArr.get(1).toUpperCase());
+					
+					/* Facet 중 Entity를 추출한다. */
+					if("ENTITY".equals(pathArr.get(1).toUpperCase()))
+					{
+						logger.debug("==== Entity ===============================");
+						
+						String entityQuery = makeQueryForMention(pathArr, keywordStr);
+						
+						logger.debug("#### Entity Search Query : "+ entityQuery);
+						
+						// 해당 Entity에 대한 검색결과가 존재하는지 체크
+						SearchResponseWrapper resCount = researchDAO.callSearchCountAPI(ARTICLE_COLLECTION, OUTPUT, entityQuery);
+
+						logger.debug("#### Entity Search Count : "+ resCount.getEs_apiResponse().getEs_totalResults());
+						
+						// 검색결과가 존재할 경우 Entity 검색 Query SET
+						if(resCount.getEs_apiResponse().getEs_totalResults() > 0)
+						{
+							singleFacetList.add(keywordStr);
+							entityList.add(entityQuery);
+						}
+					}
+					
+					logger.debug("==============================================");
+				}
+			}
+			/* ================================================== */
+		}
+		
+		/* 추출된 Entity로 Relation을 추출한다. */
+		/* ============================================ */
+		List<Map<String, String>> relationList = new ArrayList<Map<String, String>>();
+		
+		StringBuffer queryBuf = new StringBuffer();
+		queryBuf.append("MATCH (n1)-[r]->(n2) ");
+		queryBuf.append("WHERE r.count > 0 ");
+		queryBuf.append("AND type(r)<>'consistOf' ");
+		queryBuf.append("AND type(r)<>'causedBy' ");
+		queryBuf.append("AND type(r)<>'associatedWith' ");
+		
+		// Entity Facet이 하나일 경우 Relation을 OR 조건으로 조회
+		if(singleFacetList.size() == 1)
+			queryBuf.append("AND (n1.name IN split($facetList, ',') OR n2.name IN split($facetList, ',')) ");
+		else
+			queryBuf.append("AND (n1.name IN split($facetList, ',') AND n2.name IN split($facetList, ',')) ");
+		
+		queryBuf.append("RETURN n1, r, n2 ");
+		
+		logger.debug("Relation Query : "+ queryBuf.toString());
+		logger.debug("Entity Facet List : "+ singleFacetList.toString());
+		
+		// Neo4j Data를 조회한다.
+		List<Record> resultList = researchDAO.getGraphDataList(queryBuf.toString(), parameters("facetList", StringUtils.join(singleFacetList, ",")));
+		
+		logger.debug("Relation Count : "+ resultList.size());
+		logger.debug("Relation List : "+ resultList.toString());
+		
+		for(Record record : resultList)
+		{
+			List<String> pathArr = new ArrayList<String>();
+			pathArr.add("mykeyword");
+			pathArr.add("Relation");
+			
+			Map<String, Object> objMap = record.asMap();
+			Relationship relationship = (Relationship)objMap.get("r");
+			
+			pathArr.add(relationship.type());
+			
+			StringBuffer keywordStr = new StringBuffer();
+			keywordStr.append(relationship.type());
+			keywordStr.append(" : ");
+			
+			/* Start Node */
+			Node node1 = (Node)objMap.get("n1");
+			
+			String startNodeName = "";
+			for(String nodeKey : node1.keys())
+			{
+				if("name".equals(nodeKey)) startNodeName = node1.get(nodeKey).asString();
+			}
+			
+			/* End Node */
+			Node node2 = (Node)objMap.get("n2");
+			
+			String endNodeName = "";
+			for(String nodeKey : node2.keys())
+			{
+				if("name".equals(nodeKey)) endNodeName = node2.get(nodeKey).asString();
+			}
+
+			keywordStr.append(startNodeName);
+			keywordStr.append(" - ");
+			keywordStr.append(endNodeName);
+			
+			String relQuery = makeQueryForMention(pathArr, keywordStr.toString());
+
+			// 해당 Relation에 대한 검색결과가 존재하는지 체크
+//			SearchResponseWrapper resCount = researchDAO.callSearchCountAPI(ARTICLE_COLLECTION, OUTPUT, relQuery);
+
+//			logger.debug("#### Relation Search Query : "+ relQuery);
+//			logger.debug("#### Relation Search Count : "+ resCount.getEs_apiResponse().getEs_totalResults());
+			
+			// 검색결과가 0일 경우 검색조건 및 COUNT에서 제외
+//			if(resCount.getEs_apiResponse().getEs_totalResults() > 0)
+//			{
+				Map<String, String> relationInfo = new HashMap<String, String>();
+				relationInfo.put("Relation", relationship.type());
+				relationInfo.put("From", startNodeName);
+				relationInfo.put("To", endNodeName);
+				
+				relationInfo.put("Path", relQuery);
+				relationList.add(relationInfo);
+
+				/* 중복되는 Relation은 걸러서 리스트에 SET */
+				if(relHeaderList.contains(relationship.type()) == false)
+					relHeaderList.add(relationship.type());
+				
+				if("".equals(relSearch) || relSearch.equals(relationship.type())) relSearchCnt++;
+//			}
+		}
+		/* ============================================ */
+		
+		StringBuffer relBuffer = new StringBuffer();
+		
+		/* (2) 추출된 Relation / Entity별로 검색을 위한 Query를 생성한다. */
+		/* ============================================ */
+		/* Entity Facet이 하나 이상이고, 추출된 Relation Facet이 존재할 경우 검색 Query SET */
+		if(relationList.size() > 0)
+		{
+			int relBufferCnt = 1;
+			
+			relBuffer.append(START_QUERY_CHARACTER);
+			for(int idx=0 ; idx < relationList.size() ; idx++)
+			{
+				Map<String, String> relationInfo = relationList.get(idx);
+				
+				/* 검색 Relation이 없거나 동일한 경우 검색 Query SET */ 
+				if("".equals(relSearch) || relSearch.equals(relationInfo.get("Relation")))
+				{
+					relBuffer.append(relationInfo.get("Path"));
+
+					// Relation이 여러개 존재할 경우 OR 조건으로 Query SET
+					if(relBufferCnt < relSearchCnt)
+					{
+						relBuffer.append(OR_QUERY_STRING);
+						
+						relBufferCnt++;
+					}
+				}
+			}
+			relBuffer.append(END_QUERY_CHARACTER);
+		}
+
+		StringBuffer buffer = new StringBuffer();
+		// 특정 Relation 검색일 경우 Relation Query만 생성
+		if("".equals(relSearch) == false)
+		{
+			buffer.append(relBuffer.toString());
+		}
+		else
+		{
+			/* 추출된 Entity Facet이 존재할 경우 검색 Query SET */
+			if(entityList.size() > 0)
+			{
+				/* Entity Facet이 하나일 경우 Relation Query는 SKIP */ 
+				// Relation 검색 리스트가 존재하면 OR 조건 추가
+				if(singleFacetList.size() > 1 && relationList.size() > 0)
+				{
+					buffer.append(relBuffer.toString());
+					buffer.append(OR_QUERY_STRING);
+				}
+				
+				buffer.append(START_QUERY_CHARACTER);
+				for(int idx=0 ; idx < entityList.size() ; idx++)
+				{
+					buffer.append(entityList.get(idx));
+					
+					// Entity는 AND가 맞을까? OR가 맞을까?
+					if(idx != (entityList.size() - 1))
+					{
+						buffer.append(AND_QUERY_STRING);
+					}
+				}
+				buffer.append(END_QUERY_CHARACTER);
+			}
+		}
+		
+
+		/* ============================================ */
+		
+		/* (3) 만들어진 Query 조건으로 WEX Search API를 Call한다. */
+		List<RefArticleVO> articleList = getArticleReference(buffer.toString(), req);
+		
+		res.setArticleList(articleList);					// 검색결과 Article 리스트
+		res.setRelationList(relHeaderList);			// 연관 Relation 리스트
+
+		logger.debug("======================================");
+		logger.debug("End ResearchService.getFacetSearch");
+		
+		return res;
+	}
+	
+	/**
+	 * Keyword로 WEX Search Facet API를 이용해서 시계열 View 데이터를 조회한다.
+	 * @param req
+	 * @return
+	 */
+	public ResearchResponseVO getDateViewList(ResearchArticleVO req)
+	{
+		ResearchResponseVO res = new ResearchResponseVO();
+		List<String> facetParam = new ArrayList<String>();
+		
+		try{
+			
+			facetParam = makeFacetForSearch("dateView");
+			
+		} catch(JsonProcessingException ex){
+			logger.info("ResearchService.getDateViewList()에서 JsonProcessingException 발생");
+		}
+		
+		logger.debug("### getDateViewList Make Facet Param : "+ facetParam);
+		
+		SearchResponseWrapper response = researchDAO.callFacetAPI(ARTICLE_COLLECTION, OUTPUT, req.getKeyword(), facetParam.toArray(new String[facetParam.size()]));
+		
+		IbmscFacet ibmsc_facet = response.getEs_apiResponse().getIbmsc_facet();
+		List<IbmscFacetValue> ibmsc_facetValue = ibmsc_facet.getIbmsc_facetValue();
+		
+		logger.debug("### getDateViewList IbmscFacet Label : "+ ibmsc_facet.getLabel());
+		logger.debug("### getDateViewList IbmscFacet Type : "+ ibmsc_facet.getType());
+		logger.debug("### getDateViewList IbmscFacet Size : "+ ibmsc_facetValue.size());
+		
+		res.setFacetValue(ibmsc_facetValue);
+		
+		return res;
+	}
+	
+	/**
+	 * Keyword로 WEX Search Facet API를 이용해서 Word Cloud View 데이터를 조회한다.
+	 * @param req
+	 * @return
+	 */
+	public ResearchResponseVO getWordCloudList(ResearchArticleVO req)
+	{
+		ResearchResponseVO res = new ResearchResponseVO();
+		List<String> facetParam = new ArrayList<String>();
+		
+		try{
+			
+			facetParam = makeFacetForSearch("wordCloud");
+			
+		} catch(JsonProcessingException ex){
+			logger.info("ResearchService.getWordCloudList()에서 getWordCloudList 발생");
+		}
+		
+		logger.debug("### getWordCloudList Make Facet Param : "+ facetParam);
+		
+		SearchResponseWrapper response = researchDAO.callFacetAPI(ARTICLE_COLLECTION, OUTPUT, req.getKeyword(), facetParam.toArray(new String[facetParam.size()]));
+		
+		IbmscFacet ibmsc_facet = response.getEs_apiResponse().getIbmsc_facet();
+		List<IbmscFacetValue> ibmsc_facetValue = ibmsc_facet.getIbmsc_facetValue();
+		
+		logger.debug("### getWordCloudList IbmscFacet Label : "+ ibmsc_facet.getLabel());
+		logger.debug("### getWordCloudList IbmscFacet Type : "+ ibmsc_facet.getType());
+		logger.debug("### getWordCloudList IbmscFacet Size : "+ ibmsc_facetValue.size());
+		
+		res.setFacetValue(ibmsc_facetValue);
+		
+		return res;
+	}
+	
+	/**
+	 * GraphDatabase(Neo4j)에 WEX에서 추출된 Entity와 연관되는 결과를 조회한다. 
+	 * @param queryStr
+	 * @param singleFacetList
+	 * @return
+	 */
+	public GraphDatabaseVO getGraphDataList(ResearchArticleVO req)
+	{
+		GraphDatabaseVO graphDatabase = new GraphDatabaseVO();
+		List<String> singleFacetList = new ArrayList<String>();
+		
+		/*
+		 * 1. 입력한 Keyword로 대상 WEX Collection에서 일치하는 Facet(Entity, Relation)을 추출한다.(Analysis API) 
+		 */
+		AnalysisResponseWrapper response = researchDAO.callAnalysisAPI(ARTICLE_COLLECTION, OUTPUT, req.getKeyword());
+
+		/*
+		 * 2. 추출한 Facet에서 Entity를 조합, WEX Search를 호출해서 Facet 검색에 의한 논문 리스트를 조회한다.
+		 */
+		MetaData metaData = response.getMetadata();
+		List<TextFacets> textFacetsList = metaData.getTextfacets();
+		
+		if(textFacetsList.size() > 0)
+		{
+			/* (1) 추출된 Facet의 검색결과가 존재하는지 체크. 검색결과가 0일 경우 제외 */
+			/* ================================================== */
+			for(TextFacets textFacets : textFacetsList)
+			{
+				List<String> pathArr = new ArrayList<String>();
+				pathArr.addAll(textFacets.getPath());
+				String keywordStr = textFacets.getKeyword();
+				
+				/* Facet 중 My keywords 만 사용한다. */
+				if("MYKEYWORD".equals(pathArr.get(0).toUpperCase()))
+				{
+					logger.debug("==== My Keywords ===============================");
+					logger.debug("==============================================");
+					logger.debug("#### textfacets pathArr : "+ pathArr.toString());
+					
+					logger.debug("#### pathArr.get(1).toUpperCase() : "+ pathArr.get(1).toUpperCase());
+					
+					/* Facet 중 Entity를 추출한다. */
+					if("ENTITY".equals(pathArr.get(1).toUpperCase()))
+					{
+						logger.debug("#### textfacets keywordStr : "+ keywordStr);
+						singleFacetList.add(keywordStr);
+					}
+					
+					logger.debug("==============================================");
+				}
+			}
+			/* ================================================== */
+		}
+
+		StringBuffer queryBuf = new StringBuffer();
+		queryBuf.append("MATCH (n1)-[r]->(n2) ");
+		queryBuf.append("WHERE r.count > 0 ");
+		queryBuf.append("AND type(r)<>'consistOf' ");
+		queryBuf.append("AND type(r)<>'causedBy' ");
+		queryBuf.append("AND type(r)<>'associatedWith' ");
+		queryBuf.append("AND (n1.name IN split($facetList, ',') or n2.name IN split($facetList, ',')) ");
+		queryBuf.append("RETURN n1, r, n2 ");
+		queryBuf.append("ORDER BY r.count DESC ");
+		queryBuf.append("LIMIT 200");
+
+		List<Record> resultList = researchDAO.getGraphDataList(queryBuf.toString(), parameters("facetList", StringUtils.join(singleFacetList, ",")));
+
+		List<RelationshipVO> relationshipList = new ArrayList<RelationshipVO>();
+		List<NodeVO> nodeList = new ArrayList<NodeVO>();
+		
+		for(Record record : resultList)
+		{
+			/* Property Keys : name, count, experimentType, disease, multidrugResistant, nondrugInducedTherapy, pathogen, routeOfInfection, text, type */
+			/**
+			 * Relationship : id, name(type), startNodeId, startNodeName, endNodeId, endNodeName, count, experimentType
+			 * Node : id, name, group(label)
+			 */
+			Map<String, Object> objMap = record.asMap();
+			Relationship relationship = (Relationship)objMap.get("r");
+
+			/* Relationship */
+//			logger.debug("###### Neo4j Result ######");
+//			logger.debug(relationship.asMap().toString());
+//			logger.debug(relationship.get("count").toString());
+			
+			RelationshipVO relationInfo = new RelationshipVO();
+			relationInfo.setId(relationship.id());
+			relationInfo.setName(relationship.type());
+			
+//			logger.debug("### RELATIONSHIP TYPE : "+ relationship.type());
+			
+			relationInfo.setStartNodeId(relationship.startNodeId());
+			relationInfo.setEndNodeId(relationship.endNodeId());
+			
+			for(String relKey : relationship.keys())
+			{
+//					logger.debug("### RELATIONSHIP "+ relKey +" : "+ relationship.get(relKey));
+				
+				if("count".equals(relKey)) relationInfo.setCount(relationship.get(relKey).asLong());
+				if("experimentType".equals(relKey)) relationInfo.setExperimentType(relationship.get(relKey).asString());
+			}
+			
+			/* Start Node */
+			Node node1 = (Node)objMap.get("n1");
+
+			NodeVO nodeInfo = new NodeVO();
+			nodeInfo.setId(node1.id());
+			nodeInfo.setGroup(IteratorUtils.toList(node1.labels().iterator()));
+			
+//			logger.debug("### NODE1 LABEL : "+ node1.labels().toString());
+			
+			for(String nodeKey : node1.keys())
+			{
+//				logger.debug("### NODE1 "+ nodeKey +" : "+ node1.get(nodeKey));
+				
+				if("name".equals(nodeKey))
+				{
+					nodeInfo.setName(node1.get(nodeKey).asString());
+					
+					if(singleFacetList.contains(node1.get(nodeKey).asString())) nodeInfo.setFacetYn("Y");
+					else nodeInfo.setFacetYn("N");
+				}
+				else if("routeOfInfection".equals(nodeKey))
+				{
+					nodeInfo.setRouteOfInfection(node1.get(nodeKey).asString());
+				}
+				else if("type".equals(nodeKey))
+				{
+					nodeInfo.setType(node1.get(nodeKey).asString());
+				}
+			}
+			
+			// From Node Name SET
+			relationInfo.setStartNodeName(nodeInfo.getName());
+			
+			// 중복되지 않는 Node만 추가
+			boolean isExists = false;
+			for(NodeVO tmpNode : nodeList){
+				if(nodeInfo.getId() == tmpNode.getId()) isExists = true;
+			}
+			
+			if(isExists == false) nodeList.add(nodeInfo);
+			
+			/* End Node */
+			Node node2 = (Node)objMap.get("n2");
+			
+			nodeInfo = new NodeVO();
+			nodeInfo.setId(node2.id());
+			nodeInfo.setGroup(IteratorUtils.toList(node2.labels().iterator()));
+			
+//			logger.debug("### NODE2 LABEL : "+ node2.labels().toString());
+			
+			for(String nodeKey : node2.keys())
+			{
+//				logger.debug("### NODE2 "+ nodeKey +" : "+ node2.get(nodeKey));
+				
+				if("name".equals(nodeKey))
+				{
+					nodeInfo.setName(node2.get(nodeKey).asString());
+					
+					if(singleFacetList.contains(node2.get(nodeKey).asString())) nodeInfo.setFacetYn("Y");
+					else nodeInfo.setFacetYn("N");
+				}
+				else if("routeOfInfection".equals(nodeKey))
+				{
+					nodeInfo.setRouteOfInfection(node2.get(nodeKey).asString());
+				}
+				else if("type".equals(nodeKey))
+				{
+					nodeInfo.setType(node2.get(nodeKey).asString());
+				}
+			}
+			
+			// To Node Name SET
+			relationInfo.setEndNodeName(nodeInfo.getName());
+			
+			// 중복되지 않는 Node만 추가
+			isExists = false;
+			for(NodeVO tmpNode : nodeList){
+				if(nodeInfo.getId() == tmpNode.getId()) isExists = true;
+			}
+			
+			if(isExists == false) nodeList.add(nodeInfo);
+			
+			relationshipList.add(relationInfo);
+		}
+		
+		graphDatabase.setRelationshipList(relationshipList);
+		graphDatabase.setNodeList(nodeList);
+		
+		return graphDatabase;
+	}
+
+	/**
+	 * WEX Browse API를 이용해서 mykeyword.Entity 내의 Facet Group 리스트를 조회한다.
+	 * @param req
+	 * @return
+	 */
+	public List<IbmbfFacet> getBrowseList(ResearchArticleVO req)
+	{
+		List<IbmbfFacet> facetGroupList = new ArrayList<IbmbfFacet>();
+		
+		/* collection    : COLLECTION NAME
+		 * output        : application/xml, application/json ...
+		 * namespaces : keyword, facet, keywor|flag ... 
+		 */
+		SearchResponseWrapper response = researchDAO.callBrowseAPI(ARTICLE_COLLECTION, OUTPUT, "keyword");
+		
+		if(response.getEs_apiResponse().getEs_namespace().size() > 0)
+		{
+			EsNamespace es_namespace = response.getEs_apiResponse().getEs_namespace().get(0);
+			
+			logger.debug("### Es_Namespace : "+ es_namespace.getId());
+			
+			for(IbmbfFacet keywordFacet : es_namespace.getIbmbf_facet())
+			{
+				if("$.mykeyword".equals(keywordFacet.getId()))
+				{
+					for(IbmbfFacet mykeywordFacet : keywordFacet.getIbmbf_facet())
+					{
+						if("$.mykeyword.Entity".equals(mykeywordFacet.getId()))
+						{
+							logger.debug("### MyKeyword Entity List : "+ mykeywordFacet.getIbmbf_facet().size());
+							
+							facetGroupList = mykeywordFacet.getIbmbf_facet();
+						}
+						
+						if("$.mykeyword.Relation".equals(mykeywordFacet.getId()))
+						{
+							logger.debug("### MyKeyword Relation List : "+ mykeywordFacet.getIbmbf_facet().size());
+						}
+					}
+				}
+			}
+		}
+		
+		return facetGroupList;
+	}
+	
+	/**
+	 * WEX Browse API를 이용해서 mykeyword.Entity 내의 Facet Group 리스트를 조회한다.
+	 * @param req
+	 * @return
+	 */
+	public List<RefCorrelationVO> getCorrelationList(ResearchArticleVO req)
+	{
+		List<RefCorrelationVO> correlationList = new ArrayList<RefCorrelationVO>();
+		String keyword = req.getKeyword();
+		if("".equals(keyword))
+		{
+			keyword = DEFAULT_QUERY_STRING;
+		}
+		
+		List<String> facetParam = new ArrayList<String>();
+		try{
+			Map<String, Object> facetMap = new HashMap<String, Object>();
+			facetMap.put("count", 51);
+			facetMap.put("depth", 1);
+			facetMap.put("namespace", "keyword");
+			facetMap.put("id", req.getFirstFacetGrp());
+			
+			ObjectMapper facetMapper = new ObjectMapper();
+			facetParam.add(facetMapper.writeValueAsString(facetMap));
+			
+			facetMap = new HashMap<String, Object>();
+			facetMap.put("count", 51);
+			facetMap.put("depth", 1);
+			facetMap.put("namespace", "keyword");
+			facetMap.put("id", req.getSecondFacetGrp());
+			
+			facetMapper = new ObjectMapper();
+			facetParam.add(facetMapper.writeValueAsString(facetMap));
+
+		} catch(JsonProcessingException jex){
+			logger.info("ResearchService.getCorrelationList()에서 JsonProcessingException 발생");
+		}
+		
+		logger.debug("### WEX Search Query : "+ keyword);
+		logger.debug("### WEX Search facetParam : "+ facetParam.toString());
+		
+		SearchResponseWrapper response = researchDAO.callFacetCubeAPI(ARTICLE_COLLECTION, OUTPUT, keyword, facetParam.toString());
+
+		EsCube es_cube = response.getEs_apiResponse().getEs_cube();
+		
+		List<IbmscFacet> facetGroupList = es_cube.getIbmsc_facet();
+		List<EsValue> es_correlationArray = es_cube.getEs_correlationArray().getEs_value();
+		List<EsValue> es_countArray = es_cube.getEs_countArray().getEs_value();
+		
+		IbmscFacet firstFacetGroup = null;
+		IbmscFacet secondFacetGroup = null;
+		for(IbmscFacet facetGroup : facetGroupList)
+		{
+			if(req.getFirstFacetGrp().equals(facetGroup.getId()))
+				firstFacetGroup = facetGroup;
+			
+			if(req.getSecondFacetGrp().equals(facetGroup.getId()))
+				secondFacetGroup = facetGroup;
+		}
+
+		logger.debug("## first facetGroup : "+ firstFacetGroup.getIbmsc_facetValue().size());
+		logger.debug("## first facetGroup : "+ firstFacetGroup.getIbmsc_facetValue().get(0).toString());
+		
+		logger.debug("## second facetGroup : "+ secondFacetGroup.getIbmsc_facetValue().size());
+		logger.debug("## second facetGroup : "+ secondFacetGroup.getIbmsc_facetValue().get(0).toString());
+		
+		logger.debug("## correlation : "+ es_correlationArray.get(0).getEs_value().get(0));
+		logger.debug("## count : "+ es_countArray.get(0).getEs_value().get(0));
+		
+		/* Return Value가 Matrix 형태의 데이터이므로, Table 형태로 변경해서 Return 한다. */
+		for(int idx1=0 ; idx1 < firstFacetGroup.getIbmsc_facetValue().size() ; idx1++)
+		{
+			IbmscFacetValue firstFacetValue = firstFacetGroup.getIbmsc_facetValue().get(idx1);
+			Map<String, Object> firstFacet = new HashMap<String, Object>();
+			firstFacet.put("label", firstFacetValue.getLabel());
+			firstFacet.put("es_pathElement", firstFacetValue.getEs_facetPath().getEs_pathElement());
+			
+			for(int idx2=0 ; idx2 < secondFacetGroup.getIbmsc_facetValue().size() ; idx2++)
+			{
+				IbmscFacetValue secondFacetValue = secondFacetGroup.getIbmsc_facetValue().get(idx2);
+				Map<String, Object> secondFacet = new HashMap<String, Object>();
+				secondFacet.put("label", secondFacetValue.getLabel());
+				secondFacet.put("es_pathElement", secondFacetValue.getEs_facetPath().getEs_pathElement());
+				
+				// 상관값 : 소수점 2자리 반올림
+				BigDecimal correlation = new BigDecimal(es_correlationArray.get(idx1).getEs_value().get(idx2)).setScale(2, BigDecimal.ROUND_HALF_UP);
+				double count = es_countArray.get(idx1).getEs_value().get(idx2);
+				
+				if(count > 0)
+				{
+					RefCorrelationVO correlationInfo = new RefCorrelationVO();
+					correlationInfo.setFirstFacet(firstFacet);
+					correlationInfo.setSecondFacet(secondFacet);
+					correlationInfo.setCorrelation(correlation.doubleValue());
+					correlationInfo.setCount(count);
+					
+					correlationList.add(correlationInfo);
+				}
+			}
+		}
+		
+		/* Sorting */
+		Collections.sort(correlationList, new Comparator<RefCorrelationVO>(){
+			@Override
+			public int compare(RefCorrelationVO obj1, RefCorrelationVO obj2){
+				// 1 : 크다, 0 : 같다, -1 : 작다
+//				return Double.compare(obj1.getCount(), obj2.getCount());		// 오름차순
+				return Double.compare(obj2.getCount(), obj1.getCount());		// 내림차순
+			}
+		});
+		
+		logger.debug("### Correlation List : "+ correlationList.size());
+		logger.debug("### Correlation 0 : "+ correlationList.get(0).toString());
+		
+		return correlationList;
+	}
+	
+	/**
+	 * 선택된 패싯 쌍 리스트로 쿼리조합을 만들어 WEX Search API를 이용해서 논문을 검색한다.
+	 * @param req
+	 * @return
+	 */
+	public ResearchResponseVO getCorrelationSearchList(ResearchArticleVO req)
+	{
+		logger.debug("Start ResearchService.getCorrelationSearchList");
+		logger.debug("======================================");
+		
+		ResearchResponseVO res = new ResearchResponseVO();
+		List<String> relHeaderList = new ArrayList<String>();
+		
+		List<SearchCorrelationVO> correlationList = req.getCorrelationList();
+
+		String relSearch = "";
+		if(req.getRelation() != null && "".equals(req.getRelation()) == false)
+			relSearch = req.getRelation();
+		
+		int relSearchCnt = 0;
+		StringBuffer buffer = new StringBuffer();
+		
+		/* KEYWORD 검색조건을 SET 한다. */
+		if("".equals(req.getKeyword())) buffer.append(DEFAULT_QUERY_STRING);
+		else buffer.append(req.getKeyword());
+		
+		/* 조회대상 패싯 쌍을 QUERY로 조합한다. */
+		if(correlationList.size() > 0)
+		{
+			List<String> fromFacetList = new ArrayList<String>();
+			List<String> toFacetList = new ArrayList<String>();
+			
+			buffer.append(AND_QUERY_STRING);
+			
+			buffer.append(START_QUERY_CHARACTER);
+			for(int idx=0 ; idx < correlationList.size() ; idx++)
+			{
+				SearchCorrelationVO correlationInfo = correlationList.get(idx);
+				
+				List<String> firstFacetPath = correlationInfo.getFirstFacetPath();
+				List<String> secondFacetPath = correlationInfo.getSecondFacetPath();
+				
+				buffer.append(START_QUERY_CHARACTER);
+				buffer.append(makeQueryForMention(firstFacetPath, ""));
+				buffer.append(AND_QUERY_STRING);
+				buffer.append(makeQueryForMention(secondFacetPath, ""));
+				buffer.append(END_QUERY_CHARACTER);
+				
+				if(idx < (correlationList.size() -1))
+				{
+					buffer.append(OR_QUERY_STRING);
+				}
+				
+				// Relation 추출대상 Entity SET
+				if(fromFacetList.contains(firstFacetPath.get(firstFacetPath.size()-1)) == false)
+					fromFacetList.add(firstFacetPath.get(firstFacetPath.size()-1));
+				
+				if(toFacetList.contains(secondFacetPath.get(secondFacetPath.size()-1)) == false)
+					toFacetList.add(secondFacetPath.get(secondFacetPath.size()-1));
+			}
+			buffer.append(END_QUERY_CHARACTER);
+			
+			/* Relation 추출 */
+			logger.debug("## Relation From Entity : "+ fromFacetList.toString());
+			logger.debug("## Relation To Entity : "+ toFacetList.toString());
+			
+			List<Map<String, String>> relationList = new ArrayList<Map<String, String>>();
+			
+			StringBuffer queryBuf = new StringBuffer();
+			queryBuf.append("MATCH (n1)-[r]->(n2) ");
+			queryBuf.append("WHERE r.count > 0 ");
+			queryBuf.append("AND (n1.name IN split($fromFacetList, ',') AND n2.name IN split($toFacetList, ',')) ");
+			queryBuf.append("RETURN n1, r, n2 ");
+			
+			logger.debug("Relation Query : "+ queryBuf.toString());
+			
+			// Neo4j Data를 조회한다.
+			List<Record> resultList = researchDAO.getGraphDataList(queryBuf.toString(), parameters("fromFacetList", StringUtils.join(fromFacetList, ","), "toFacetList", StringUtils.join(toFacetList, ",")));
+			
+			logger.debug("Relation Count : "+ resultList.size());
+			logger.debug("Relation List : "+ resultList.toString());
+			
+			for(Record record : resultList)
+			{
+				List<String> pathArr = new ArrayList<String>();
+				pathArr.add("mykeyword");
+				pathArr.add("Relation");
+				
+				Map<String, Object> objMap = record.asMap();
+				Relationship relationship = (Relationship)objMap.get("r");
+				
+				pathArr.add(relationship.type());
+				
+				StringBuffer keywordStr = new StringBuffer();
+				keywordStr.append(relationship.type());
+				keywordStr.append(" : ");
+				
+				/* Start Node */
+				Node node1 = (Node)objMap.get("n1");
+				
+				String startNodeName = "";
+				for(String nodeKey : node1.keys())
+				{
+					if("name".equals(nodeKey)) startNodeName = node1.get(nodeKey).asString();
+				}
+				
+				/* End Node */
+				Node node2 = (Node)objMap.get("n2");
+				
+				String endNodeName = "";
+				for(String nodeKey : node2.keys())
+				{
+					if("name".equals(nodeKey)) endNodeName = node2.get(nodeKey).asString();
+				}
+
+				keywordStr.append(startNodeName);
+				keywordStr.append(" - ");
+				keywordStr.append(endNodeName);
+				
+				String relQuery = makeQueryForMention(pathArr, keywordStr.toString());
+
+				Map<String, String> relationInfo = new HashMap<String, String>();
+				relationInfo.put("Relation", relationship.type());
+				relationInfo.put("From", startNodeName);
+				relationInfo.put("To", endNodeName);
+				
+				relationInfo.put("Path", relQuery);
+				relationList.add(relationInfo);
+				
+				/* 중복되는 Relation은 걸러서 리스트에 SET */
+				if(relHeaderList.contains(relationship.type()) == false)
+				{
+					relHeaderList.add(relationship.type());
+				}
+				
+				if(relSearch.equals(relationship.type())) relSearchCnt++;
+			}
+			
+			if(relationList.size() > 0 && "".equals(relSearch) == false)
+			{
+				int relBufferCnt = 0;
+				
+				buffer.append(AND_QUERY_STRING);
+				
+				buffer.append(START_QUERY_CHARACTER);
+				for(int idx=0 ; idx < relationList.size() ; idx++)
+				{
+					Map<String, String> relationInfo = relationList.get(idx);
+					
+					/* 검색 Relation이 동일한 경우 검색 Query SET */ 
+					if(relSearch.equals(relationInfo.get("Relation")))
+					{
+						buffer.append(relationInfo.get("Path"));
+						relBufferCnt++;
+						
+						// Relation이 여러개 존재할 경우 OR 조건으로 Query SET
+						if(relBufferCnt < relSearchCnt)
+						{
+							buffer.append(OR_QUERY_STRING);
+						}
+					}
+				}
+				buffer.append(END_QUERY_CHARACTER);
+			}
+		}
+		
+		/* 만들어진 Query 조건으로 WEX Search API를 Call한다. */
+		List<RefArticleVO> articleList = getArticleReference(buffer.toString(), req);
+		
+		logger.debug("### articleList size : "+ articleList.size());
+		
+		res.setArticleList(articleList);					// 검색결과 Article 리스트
+		res.setRelationList(relHeaderList);			// 연관 Relation 리스트
+
+		logger.debug("======================================");
+		logger.debug("End ResearchService.getCorrelationSearchList");
+		
+		return res;
+	}
+	
+	/**
+	 * Article ID로 WEX Search Preview API를 이용해서 논문 상세내용(Abstract)을 조회한다.
+	 * @param req
+	 * @return
+	 */
+	public String getArticlePreview(ResearchArticleVO req)
+	{
+		logger.debug("Start ResearchService.getArticlePreview");
+		logger.debug("======================================");
+		
+		PreviewResponseWrapper response = researchDAO.callPreviewAPI(ARTICLE_COLLECTION, OUTPUT, req.getKeyword(), req.getArticleId());
+		
+		logger.debug(response.getEs_apiResponse().getEs_html());
+		logger.debug("======================================");
+		logger.debug("End ResearchService.getArticlePreview");
+		
+		return response.getEs_apiResponse().getEs_html();
+	}
+	
+	/**
+	 * Search Facet API 호출을 위한 facet param을 조합한다.
+	 * @param facetType
+	 * @return
+	 * @throws JsonProcessingException
+	 */
+	private List<String> makeFacetForSearch(String facetType) throws JsonProcessingException
+	{
+		List<String> facetParam = new ArrayList<String>();
+		
+		/* 시계열 조회일 경우 */
+		if("dateView".equals(facetType))
+		{
+			Map<String, Object> facetMap = new HashMap<String, Object>();
+			facetMap.put("count", -1);
+			facetMap.put("depth", 1);
+			facetMap.put("namespace", "date");
+			facetMap.put("id", "$.publishdate.year");
+			
+			Map<String, Object> segmentMap = new HashMap<String, Object>();
+			segmentMap.put("returnZeroCount", true);
+			segmentMap.put("offet", 0);
+			segmentMap.put("length", 101);
+			segmentMap.put("returnEarliestDate", true);
+			
+			facetMap.put("segmentation", segmentMap);
+			
+			ObjectMapper facetMapper = new ObjectMapper();
+			facetParam.add(facetMapper.writeValueAsString(facetMap));
+		}
+		/* Word Cloud 조회일 경우 */
+		else if("wordCloud".equals(facetType))
+		{
+			Map<String, Object> facetMap = new HashMap<String, Object>();
+			facetMap.put("count", 15);						// 조회되는 Word Count
+			facetMap.put("depth", 1);
+			facetMap.put("namespace", "keyword");
+			facetMap.put("id", "$.mykeyword.Entity");		// My Keywords > Entity 내의 모든 facet 대상
+			
+			ObjectMapper facetMapper = new ObjectMapper();
+			facetParam.add(facetMapper.writeValueAsString(facetMap));
+		}
+		else
+		{
+			Map<String, Object> facetMap = new HashMap<String, Object>();
+			facetMap.put("count", 10);						// 조회 Count
+			facetMap.put("depth", 1);
+			facetMap.put("namespace", "keyword");
+			facetMap.put("id", "$.mykeyword.Entity");		// My Keywords > Entity 내의 모든 facet 대상
+
+			
+			ObjectMapper facetMapper = new ObjectMapper();
+			facetParam.add(facetMapper.writeValueAsString(facetMap));
+		}
+		
+		return facetParam;
+	}
+	
+	/**
+	 * 검색 Query를 조합한다.
+	 * @param pathArr
+	 * @param keywordStr
+	 * @return
+	 */
+	private String makeQueryForMention(List<String> pathArr, String keywordStr)
+	{
+		StringBuilder buffer = new StringBuilder();
+		buffer.append(START_QUERY_CHARACTER);
+		
+		if(pathArr != null && pathArr.size() > 0)
+		{
+			buffer.append(prefixKeyword);
+			
+			for(int idx=0;idx < pathArr.size();idx++)
+			{
+				if(idx == 0)
+				{
+					buffer.append("\"");
+					
+					if("mykeyword".equals(pathArr.get(idx))) buffer.append("My Keywords");
+					else buffer.append(pathArr.get(idx));
+						
+					buffer.append("\"");
+				}
+				else
+				{
+					buffer.append("/\"");
+					buffer.append(pathArr.get(idx));
+					buffer.append("\"");
+				}
+			}
+			
+			if("".equals(keywordStr) == false)
+			{
+				buffer.append("/\"");
+				buffer.append(keywordStr);
+				buffer.append("\"");
+			}
+		}
+		else
+		{
+			buffer.append(DEFAULT_QUERY_STRING);
+		}
+		
+		buffer.append(END_QUERY_CHARACTER);
+		
+		return buffer.toString();
+	}
+
+	/**
+	 * WEX Search API를 이용해서 논문 리스트를 조회한다.
+	 * @param req
+	 * @return
+	 */
+	private List<RefArticleVO> getArticleReference(String keyWord, ResearchArticleVO req)
+	{
+		List<RefArticleVO> res = new ArrayList<RefArticleVO>();
+		List<String> facetParam = new ArrayList<String>();
+		
+		// 페이지당 건수가 INPUT으로 존재할 경우
+		if(req.getPageRow() > 0) RESULTS = req.getPageRow();
+		
+		try{
+			/* Sorting 기준이 없을 경우 PublicationType asc, PublishDate desc 순으로 정렬한다. */
+			if(req.getSortKey() == null || "".equals(req.getSortKey()))
+			{
+				Map<String, String> facetMap = new HashMap<String, String>();
+				facetMap.put("key", "pubtypeorder");
+				facetMap.put("order", "asc");
+				
+				ObjectMapper facetMapper = new ObjectMapper();
+				facetParam.add(facetMapper.writeValueAsString(facetMap));
+				
+				facetMap = new HashMap<String, String>();
+				facetMap.put("key", "publishdate");
+				facetMap.put("order", "desc");
+				
+				facetMapper = new ObjectMapper();
+				facetParam.add(facetMapper.writeValueAsString(facetMap));
+			}
+			else
+			{
+				Map<String, String> facetMap = new HashMap<String, String>();
+				facetMap.put("key", req.getSortKey());
+				facetMap.put("order", "desc");
+				
+				ObjectMapper facetMapper = new ObjectMapper();
+				facetParam.add(facetMapper.writeValueAsString(facetMap));
+			}
+		} catch(JsonProcessingException jex){
+			logger.info("ResearchService.getArticleReference()에서 JsonProcessingException 발생");
+		}
+		
+		logger.debug("### WEX Search Query : "+ keyWord);
+		logger.debug("### WEX Search facetParam : "+ facetParam.toString());
+		
+		SearchResponseWrapper response = researchDAO.callSearchAPI(ARTICLE_COLLECTION, OUTPUT, keyWord, req.getStartRow()-1, RESULTS, facetParam.toArray(new String[facetParam.size()]));
+
+		// WEX 검색결과가 있을 경우 OUTPUT SET
+		if (0 != response.getEs_apiResponse().getEs_totalResults())
+		{
+			res = getRefArticleList(response);
+		}
+		
+		return res;
+	}
+	
+	/**
+	 * 조회된 논문리스트를 세팅한다.
+	 * @param es_result
+	 * @return
+	 */
+	private List<RefArticleVO> getRefArticleList(SearchResponseWrapper response)
+	{
+		List<RefArticleVO> res = new ArrayList<RefArticleVO>();
+		
+		List<EsResult> es_result = response.getEs_apiResponse().getEs_result();
+		int total = response.getEs_apiResponse().getEs_totalResults();
+		int curr  = response.getEs_apiResponse().getEs_startIndex()+1;
+		
+		if(null != es_result)
+		{
+			for (EsResult e : es_result)
+			{
+				RefArticleVO r = new RefArticleVO();
+				
+				// WEX ID : file:///home/esadmin/pubmed/output/meshterm/3/PMID_12937013.txt
+				r.setArticleId(e.getEs_id());
+	
+				List<IbmscField> ibmscField = e.getIbmsc_field();
+				if(null != ibmscField)
+				{
+					for (IbmscField i : ibmscField)
+					{
+						if(i.getId().equals("title"))						r.setTitle(i.getText());
+						else if (i.getId().equals("author"))			r.setAuthor(i.getText());
+						else if (i.getId().equals("pubtypename"))	r.setPubType(i.getText());
+						else if (i.getId().equals("pubtypeorder"))	r.setPubTypeIdx(Integer.parseInt(i.getText()));
+
+						else if (i.getId().equals("publishdate"))	r.setPubDate(i.getText());
+						else if (i.getId().equals("journaltitle"))		r.setPubJournal(i.getText());
+						else if (i.getId().equals("pmid"))				r.setPubmedPmid(i.getText());
+						else if (i.getId().equals("impactfactor"))	r.setImpactFactor(i.getText());
+					}
+				}
+				
+
+				
+				Map<String, String> convertAbstract = WEXUtil.getAbstractMap(r.getTitle(), e.getEs_summary());
+
+
+				
+				StringBuffer sb = new StringBuffer();
+				Iterator<String> iterator = convertAbstract.keySet().iterator();
+				while (iterator.hasNext())
+				{
+					String key = (String) iterator.next();
+					if("#TITLE".equals(key))
+					{
+						r.setTitle(convertAbstract.get(key));
+					}
+					else
+					{
+						sb.append("<p style='font-weight: bold;font-size: 13px; margin-bottom : 0px; margin-top : 10px;'>"+ key +"</p>"); // 볼드 추가, 폰트사이즈 up (20180802)
+						sb.append("<p>"+ convertAbstract.get(key) +"</p>");
+					}
+				}
+	
+				r.setTotal(total);
+				r.setCurr(curr++);
+
+				r.setAbstractText(sb.toString());
+	
+				res.add(r);
+				
+
+			}
+		}
+		
+		return res;
+	}
+	
+}
