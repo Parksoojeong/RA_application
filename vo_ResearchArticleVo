@@ -1,0 +1,160 @@
+/**
+ * 
+ */
+package com.aibril.antibiotics.ue.research.vo;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import com.aibril.antibiotics.kb.vo.neo4j.RelationshipVO;
+
+/**
+ * @author 08248
+ *
+ */
+public class ResearchArticleVO {
+
+	private String keyword;								// 검색 KEYWORD
+	private String sortKey;									// 조회순서 기준 Key
+	
+	private String firstFacetGrp;							// 첫번째 FacetGroup(패싯 쌍 검색 시)
+	private String secondFacetGrp;						// 두번째 FacetGroup(패싯 쌍 검색 시)
+
+	// 패싯 쌍 검색조건
+	private List<SearchCorrelationVO> correlationList = new ArrayList<SearchCorrelationVO>();
+	
+	private int pageRow;									// 페이지당 조회건수
+	private int startRow;									// 요청 시작 Rows Number
+	
+	// Article Download PMID
+	private List<String> pmidArr = new ArrayList<String>();
+	
+	private String relation;									// 검색 Relation
+	private String chartYear;								// 검색 시계열차트 Click Data
+	
+	// 검색 wordCloud Click Data
+	private List<String> wordCloud = new ArrayList<String>();
+	
+	private RelationshipVO relationshipInfo;			// 검색 GraphDatabase Click Data
+	
+	private String articleId;								// Article ID
+
+	public String getKeyword() {
+		return keyword;
+	}
+
+	public void setKeyword(String keyword) {
+		this.keyword = keyword;
+	}
+
+	public String getSortKey() {
+		return sortKey;
+	}
+
+	public void setSortKey(String sortKey) {
+		this.sortKey = sortKey;
+	}
+
+	public String getFirstFacetGrp() {
+		return firstFacetGrp;
+	}
+
+	public void setFirstFacetGrp(String firstFacetGrp) {
+		this.firstFacetGrp = firstFacetGrp;
+	}
+
+	public String getSecondFacetGrp() {
+		return secondFacetGrp;
+	}
+
+	public void setSecondFacetGrp(String secondFacetGrp) {
+		this.secondFacetGrp = secondFacetGrp;
+	}
+
+	public List<SearchCorrelationVO> getCorrelationList() {
+		List<SearchCorrelationVO> ret = new ArrayList<SearchCorrelationVO>();
+		ret.addAll(correlationList);
+		return ret;
+	}
+
+	public void setCorrelationList(List<SearchCorrelationVO> correlationList) {
+		this.correlationList = (correlationList == null) ? new ArrayList<SearchCorrelationVO>() : new ArrayList<SearchCorrelationVO>(correlationList);
+	}
+
+	public int getPageRow() {
+		return pageRow;
+	}
+
+	public void setPageRow(int pageRow) {
+		this.pageRow = pageRow;
+	}
+
+	public int getStartRow() {
+		return startRow;
+	}
+
+	public void setStartRow(int startRow) {
+		this.startRow = startRow;
+	}
+
+	public List<String> getPmidArr() {
+		List<String> ret = new ArrayList<String>();
+		ret.addAll(pmidArr);
+		return ret;
+	}
+
+	public void setPmidArr(List<String> pmidArr) {
+		this.pmidArr = (pmidArr == null) ? new ArrayList<String>() : new ArrayList<String>(pmidArr);
+	}
+
+	public String getRelation() {
+		return relation;
+	}
+
+	public void setRelation(String relation) {
+		this.relation = relation;
+	}
+
+	public String getChartYear() {
+		return chartYear;
+	}
+
+	public void setChartYear(String chartYear) {
+		this.chartYear = chartYear;
+	}
+
+	public List<String> getWordCloud() {
+		List<String> ret = new ArrayList<String>();
+		ret.addAll(wordCloud);
+		return ret;
+	}
+
+	public void setWordCloud(List<String> wordCloud) {
+		this.wordCloud = (wordCloud == null) ? new ArrayList<String>() : new ArrayList<String>(wordCloud);
+	}
+
+	public RelationshipVO getRelationshipInfo() {
+		return relationshipInfo;
+	}
+
+	public void setRelationshipInfo(RelationshipVO relationshipInfo) {
+		this.relationshipInfo = relationshipInfo;
+	}
+	
+	public String getArticleId() {
+		return articleId;
+	}
+
+	public void setArticleId(String articleId) {
+		this.articleId = articleId;
+	}
+
+	@Override
+	public String toString() {
+		return "ResearchArticleVO [keyword=" + keyword + ", sortKey=" + sortKey + ", firstFacetGrp=" + firstFacetGrp
+				+ ", secondFacetGrp=" + secondFacetGrp + ", correlationList=" + correlationList + ", pageRow=" + pageRow
+				+ ", startRow=" + startRow + ", pmidArr=" + pmidArr + ", relation=" + relation + ", chartYear="
+				+ chartYear + ", wordCloud=" + wordCloud + ", relationshipInfo=" + relationshipInfo + ", articleId="
+				+ articleId + "]";
+	}
+}
