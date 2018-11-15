@@ -1,0 +1,89 @@
+package com.aibril.antibiotics.kb.service;
+
+import javax.ws.rs.Consumes;
+import javax.ws.rs.FormParam;
+import javax.ws.rs.POST;
+import javax.ws.rs.Path;
+import javax.ws.rs.Produces;
+
+import org.springframework.stereotype.Service;
+
+import com.aibril.antibiotics.kb.vo.analysis.AnalysisResponseWrapper;
+import com.aibril.antibiotics.kb.vo.preview.PreviewResponseWrapper;
+import com.aibril.antibiotics.kb.vo.search.SearchResponseWrapper;
+
+@Consumes("multipart/form-data")
+@Produces({"application/json"})
+@Service("wexService")
+public interface IWEXService {
+
+	@POST
+	@Path("/search")
+	public SearchResponseWrapper search(
+			@FormParam("collection") String collection, 
+			@FormParam("output") String output, 
+			@FormParam("query") String query,
+			@FormParam("queryLang") String queryLang,
+			@FormParam("start") int start,
+			@FormParam("results") int results,
+			@FormParam("sort") String... sorts
+	);
+	
+	@POST
+	@Path("/search/count")
+	public SearchResponseWrapper count(
+			@FormParam("collection") String collection, 
+			@FormParam("output") String output, 
+			@FormParam("query") String query,
+			@FormParam("queryLang") String queryLang
+	);
+	
+	@POST
+	@Path("/search/preview")
+	public PreviewResponseWrapper preview(
+			@FormParam("collection") String collection, 
+			@FormParam("output") String output, 
+			@FormParam("query") String query,
+			@FormParam("queryLang") String queryLang,
+			@FormParam("uri") String uri
+	);
+	
+	@POST
+	@Path("/search/facet")
+	public SearchResponseWrapper facet(
+			@FormParam("collection") String collection, 
+			@FormParam("output") String output, 
+			@FormParam("query") String query,
+			@FormParam("queryLang") String queryLang,
+			@FormParam("enableFacetPath") boolean enableFacetPath,
+			@FormParam("facet") String[] facet
+	);
+	
+	@POST
+	@Path("/search/facet/cube")
+	public SearchResponseWrapper cube(
+			@FormParam("collection") String collection, 
+			@FormParam("output") String output, 
+			@FormParam("query") String query,
+			@FormParam("queryLang") String queryLang,
+			@FormParam("enableFacetPath") boolean enableFacetPath,
+			@FormParam("correlation") String correlation,
+			@FormParam("facets") String facets
+	);
+	
+	@POST
+	@Path("/analysis/text")
+	public AnalysisResponseWrapper analysis(
+			@FormParam("collection") String collection, 
+			@FormParam("output") String output, 
+			@FormParam("text") String text
+	);
+	
+	@POST
+	@Path("/facets/browse")
+	public SearchResponseWrapper browse(
+			@FormParam("collection") String collection,
+			@FormParam("output") String output,
+			@FormParam("namespaces") String namespaces
+	);
+}
